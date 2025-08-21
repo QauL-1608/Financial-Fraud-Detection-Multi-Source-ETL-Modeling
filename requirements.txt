@@ -1,7 +1,6 @@
 pandas
 numpy
 pyyaml
-statsmodels
 scikit-learn
 matplotlib
 streamlit
