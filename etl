@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+import argparse, json
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import yaml
+
+def load_config(path="configs/config.yaml"):
+    with open(path,"r") as f:
+        return yaml.safe_load(f)
+
+def quality_report(df, key_cols):
+    rep = {}
+    rep["rows"] = int(len(df))
+    rep["missing_by_col"] = {c:int(df[c].isna().sum()) for c in df.columns}
+    for k in key_cols:
+        rep[f"dup_{k}"] = int(df[k].duplicated().sum()) if k in df.columns else None
+    num_cols = df.select_dtypes(include=[np.number]).columns
+    if len(num_cols):
+        z = (df[num_cols] - df[num_cols].mean())/df[num_cols].std(ddof=0)
+        rep["zscore_outliers"] = {c:int((z[c].abs()>3).sum()) for c in num_cols}
+    return rep
+
+def build_features(txn, credit, mobile, cfg):
+    # Timestamp features
+    txn["timestamp"] = pd.to_datetime(txn["timestamp"])
+    txn = txn.sort_values(["user_id","timestamp"])
+    txn["hour"] = txn["timestamp"].dt.hour
+    txn["dow"] = txn["timestamp"].dt.dayofweek
+    txn["is_night"] = ((txn["hour"]<5) | (txn["hour"]>23)).astype(int)
+
+    # Velocity features: per user rolling counts/amounts
+    txn["prev_ts"] = txn.groupby("user_id")["timestamp"].shift(1)
+    txn["mins_since_prev"] = (txn["timestamp"] - txn["prev_ts"]).dt.total_seconds()/60
+    txn["short_gap"] = (txn["mins_since_prev"]<=10).fillna(False).astype(int)
+
+    # Rolling windows per user
+    txn["amount_roll_3"] = txn.groupby("user_id")["amount"].rolling(3, min_periods=1).mean().reset_index(level=0, drop=True)
+    txn["amount_roll_6"] = txn.groupby("user_id")["amount"].rolling(6, min_periods=1).mean().reset_index(level=0, drop=True)
+    txn["count_roll_6"] = txn.groupby("user_id")["amount"].rolling(6, min_periods=1).count().reset_index(level=0, drop=True)
+
+    # Device risk encoding
+    dev_map = {"android":0.2,"ios":0.15,"web":0.25,"feature_phone":0.35}
+    txn["device_risk"] = txn["device_type"].map(dev_map).fillna(0.2)
+
+    # Merchant risk from history
+    m_hist = txn.groupby("merchant_id")["label_fraud"].mean().fillna(0.0)
+    txn["merchant_risk"] = txn["merchant_id"].map(m_hist).fillna(0.0)
+
+    # Country risk (toy prior)
+    country_prior = {"KE":0.05,"UG":0.08,"TZ":0.07,"RW":0.06}
+    txn["country_risk"] = txn["country"].map(country_prior).fillna(0.05)
+
+    # Join credit
+    df = txn.merge(credit, on="user_id", how="left")
+
+    # Join mobile (latest week per user)
+    last_mm = mobile.sort_values("week_ending").groupby("user_id").tail(1).drop(columns=["week_ending"])
+    df = df.merge(last_mm, on="user_id", how="left")
+
+    # Lags
+    for lag in [1,2,3]:
+        df[f"amount_lag_{lag}"] = df.groupby("user_id")["amount"].shift(lag)
+
+    # Final cleanup
+    df = df.dropna().reset_index(drop=True)
+    return df
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", default="configs/config.yaml")
+    parser.add_argument("--run_all", action="store_true")
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    raw = Path(cfg["paths"]["raw"])
+    proc = Path(cfg["paths"]["processed"])
+    reports = Path(cfg["paths"]["reports"])
+    proc.mkdir(parents=True, exist_ok=True); reports.mkdir(parents=True, exist_ok=True)
+
+    txn = pd.read_csv(raw/"transactions.csv", parse_dates=["timestamp"])
+    credit = pd.read_csv(raw/"credit_bureau.csv")
+    mobile = pd.read_csv(raw/"mobile_money.csv", parse_dates=["week_ending"])
+
+    q_txn = quality_report(txn, ["txn_id"])
+    q_credit = quality_report(credit, ["user_id"])
+    q_mobile = quality_report(mobile, ["user_id"])
+
+    # Basic cleaning
+    txn = txn.drop_duplicates("txn_id").sort_values("timestamp")
+    txn["amount"] = txn["amount"].clip(0, txn["amount"].quantile(0.999))
+
+    features = build_features(txn, credit, mobile, cfg)
+    features.to_csv(proc/"features.csv", index=False)
+
+    with open(reports/"quality_report.json","w") as f:
+        json.dump({"transactions": q_txn, "credit": q_credit, "mobile": q_mobile}, f, indent=2)
+
+    ratio = cfg["model"]["train_ratio"]
+    cut = int(len(features)*ratio)
+    features.iloc[:cut].to_csv(proc/"train.csv", index=False)
+    features.iloc[cut:].to_csv(proc/"test.csv", index=False)
+
+    print(f"[OK] Wrote features to {proc/'features.csv'}")
+    print(f"[OK] Train/Test saved → {proc/'train.csv'}, {proc/'test.csv'}")
+    print(f"[OK] Quality report → {reports/'quality_report.json'}")
+
+if __name__ == "__main__":
+    main()
