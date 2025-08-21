@@ -1,129 +1,74 @@
-# Climate Data Pipeline for Renewable Energy Forecasting
+# Financial Fraud Detection – Multi-Source ETL + Modeling
 
-**One-week portfolio project** showing how to ingest, validate, transform, and forecast **solar + demand** with 3rd‑party weather data, then serve insights via a lightweight app.
+**Portfolio project** that mirrors a real-world fintech data role: ingest messy 3rd‑party data (fintech API logs, credit bureau CSV, mobile money usage), clean + validate, engineer features, run **anomaly detection + supervised models**, and serve alerts via a **Streamlit** app. Includes an **Airflow DAG** and **CI**.
 
-> Maps directly to data integration roles: ETL from multiple 3rd parties, quality checks, pipeline orchestration, scalable storage, and forecasting for BI/ML use cases.
+> Matches JD requirements: 3rd‑party integration, ETL/ELT, data quality, scalable architecture, ML for risk, documentation, and security practices.
 
-## What this repo demonstrates
-- **Integrate 3rd‑party data** (weather API → JSON; grid demand → CSV; site metadata → YAML).
-- **ETL pipeline** with cleaning, enrichment, unit normalization, and schema validation.
-- **Statistical data quality checks** (missingness, duplicates, z-score outliers).
-- **Time-series forecasting** (SARIMA baseline + feature engineered regression).
-- **Streamlit app** to visualize forecasts & KPIs.
-- **Airflow DAG** (skeleton) for production orchestration.
-- **Security & governance**: config-driven, secrets via env vars, PII-free telemetry.
-
-## Results (sample on synthetic data)
-- **MAPE improvement:** *22.4%* (feature engineered model vs. naive baseline).
-- **End-to-end runtime:** *< 2 minutes* on laptop for daily batch.
-- **Data readiness:** after ETL, **0 duplicate timestamps**, **<0.5% missing** (imputed).
-
-> This repository runs on self-contained synthetic data so reviewers can execute everything offline. Swap sources to real APIs by toggling flags in `configs/config.yaml`.
-
----
-
-## Architecture
-
-```
-Weather API/JSON   Grid CSV    Site YAML
-      │               │            │
-      └──► Ingestion ─┼────────────┘
-                      │
-                  Validation
-                      │
-                Cleaning/Enrich
-                      │
-                 Feature Build
-                      │
-                 Forecast Model
-                      │
-              Storage (processed)
-                      │
-               Streamlit/BI App
-```
-
-**Key tech:** Python, Pandas, PyYAML, Statsmodels (SARIMAX), Scikit-learn, Streamlit, Airflow (skeleton).
-
----
+## Highlights
+- **Data sources** (synthetic but realistic): Transaction logs (JSON/CSV), Credit Bureau (CSV), Mobile Money usage (CSV).
+- **ETL**: schema alignment, deduping, timestamp normalization, enrichment, and checks.
+- **Quality**: missingness, duplicates, z-score outliers; report in `reports/quality_report.json`.
+- **Features**: velocity, device/merchant risk, time-of-day, rolling stats, user history, credit score.
+- **Models**:
+  - **IsolationForest** for unsupervised anomalies.
+  - **Logistic Regression (class_weight='balanced')** for supervised fraud classification.
+- **Metrics**: Precision/Recall/F1/ROC-AUC, PR-AUC, confusion matrix; written to `reports/metrics.json`.
+- **Serving**: Streamlit dashboard for alerts & KPIs.
+- **Orchestration**: Airflow DAG (skeleton) for daily runs.
+- **CI**: GitHub Actions workflow to run ETL + tests on PRs.
 
 ## Quickstart
 
 ```bash
-# 1) Create environment (recommended)
-python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# 2) Install deps
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
-# 3) Run ETL
-python scripts/api_data_ingestion.py --run_all
+# 1) Run ETL + feature build
+python scripts/etl_pipeline.py --run_all
 
-# 4) Train + forecast
-python scripts/forecast_pipeline.py --train --forecast_horizon 48
+# 2) Train & evaluate
+python scripts/model_train.py --train --eval
 
-# 5) Launch app
+# 3) Anomaly scoring (unsupervised)
+python scripts/anomaly_detection.py --score
+
+# 4) Launch dashboard
 streamlit run app/streamlit_app.py
 ```
-
-### Data locations
-- Raw: `data/raw/`
-- Processed & features: `data/processed/`
-- Reports/plots: `reports/`
-
-### Metrics & Reporting
-- After training, metrics (MAE/MAPE/RMSE) are written to `reports/metrics.json`.
-- Forecast outputs saved to `data/processed/forecast.csv`.
-
----
 
 ## Repo layout
 
 ```
-climate-energy-forecasting/
+fraud-detection-etl/
 ├─ README.md
 ├─ requirements.txt
-├─ Makefile
 ├─ configs/
 │  └─ config.yaml
 ├─ data/
-│  ├─ raw/
-│  │  ├─ weather_timeseries.csv
-│  │  └─ demand_timeseries.csv
-│  └─ processed/
+│  ├─ raw/              # synthetic data (safe to commit)
+│  └─ processed/        # features, train/test, predictions
 ├─ scripts/
-│  ├─ api_data_ingestion.py
-│  └─ forecast_pipeline.py
+│  ├─ etl_pipeline.py
+│  ├─ model_train.py
+│  └─ anomaly_detection.py
+├─ models/              # persisted sklearn models
 ├─ app/
 │  └─ streamlit_app.py
 ├─ dags/
 │  └─ airflow_dag.py
 ├─ reports/
-│  └─ (metrics & figures written here)
+│  ├─ quality_report.json
+│  └─ metrics.json
 ├─ tests/
-│  └─ test_quality_checks.py
+│  └─ test_quality.py
 └─ .github/workflows/
    └─ ci.yml
 ```
 
----
-
-## Replace synthetic with real data (2 lines)
-In `configs/config.yaml` set:
-```yaml
-use_synthetic_weather: false
-use_synthetic_demand: false
-```
-and fill in your real endpoints / credentials via env vars indicated in the same file.
-
----
-
-## Security & Compliance Notes
-- No PII. All sample data are synthetic.
-- Config-driven credentials. Put secrets in environment variables, *not* in code.
-- Add row-level access controls when deploying to shared storage (e.g., S3 Lake Formation).
-
----
+## Security & Compliance
+- No PII; all data are synthetic.
+- Config-driven paths; secrets (if any real APIs are used) via environment variables.
+- Documented transformations; reproducible pipeline.
 
 ## License
 MIT
-
